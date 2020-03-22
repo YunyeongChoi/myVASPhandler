@@ -71,6 +71,9 @@ class VASPSetUp(object):
             user_incar_setting['IBRION'] = -1
             user_incar_setting['NSW'] = 0
             user_incar_setting['NELM'] = 5000
+            user_incar_setting['LWAVE'] = '.TRUE.'
+            user_incar_setting['ISYM'] = -1
+            user_incar_setting['ICORELEVEL'] = 1
             
         if dos:
             user_incar_setting['NEDOS'] = 2500
@@ -107,8 +110,7 @@ class VASPSetUp(object):
         else:
             return user_incar_setting
 
-    def structure_from_mp(self, formula, spgp, config=[1,1,1], 
-                          write_file=False, KEY='R0CmAuNPKWzrUo8Z'):
+    def structure_from_mp(self, formula, spgp, write_file=False, KEY='R0CmAuNPKWzrUo8Z'):
         """
         Args: 
             formula - Chemical formula like NaCr2O4, spgp - Space group
@@ -118,33 +120,41 @@ class VASPSetUp(object):
         count = 0
         spgp_list = []
         poscar = os.path.join(self.dir, 'POSCAR')
-        
         mpr = MPRester(KEY)
         mtr_list = mpr.get_materials_ids(formula)
-
         for mtr in mtr_list:
             a = SpacegroupAnalyzer(mpr.get_structure_by_material_id(mtr))
             spgp_list.append(a.get_space_group_symbol())
-            
             if a.get_space_group_symbol() == spgp:
                 count += 1
                 structure = mpr.get_structure_by_material_id(mtr)
-                
         if count > 1:
             print(spgp_list)
             raise ValueError("More than one structure. Check the atoms")
         elif count == 0:
             print(spgp_list)
             raise ValueError("Check the formula and space group again")
-        
-        if config:
-            structure.make_supercell(cellsize)
-            
         if write_file == True:
             Poscar(structure).write_file(poscar)
         else:
             return structure
-            
+
+    def structure_from_id(self, mpid = 'MPID', write_file=True, KEY='R0CmAuNPKWzrUo8Z'):
+        """
+        Args: 
+            mpid - Materials Project ID, config = [xa, xb, xc]
+        Returns: 
+            structure object match with Materials Project ID
+        """
+        poscar = os.path.join(self.dir, 'POSCAR')
+        mpr = MPRester(KEY)
+        mpid = self.dir.split('/')[-1].split('_')[0]
+        structure = mpr.get_structure_by_material_id(mpid)
+        if write_file == True:
+            Poscar(structure).write_file(poscar)
+        else:
+            return structure
+        
     def structure_from_dic(self, copy_contcar=False):
         """
         Args: 
@@ -154,21 +164,17 @@ class VASPSetUp(object):
             new structure file from CONTCAR
         """
         poscar = os.path.join(self.dir, 'POSCAR')
-        
         if not os.path.exists(poscar):
             copy_contcar = True
-            
         if not copy_contcar:
             return poscar
-        
         contcar = os.path.join(self.dir, 'CONTCAR')
-        
         if os.path.exists(contcar):
             with open(contcar) as f:
                 contents = f.read()
             if '0' in contents:
                 copyfile(contcar, poscar)
-            
+                
             return poscar
         
     def perturb_poscar(self, perturbation):
@@ -275,10 +281,6 @@ class VASPSetUp(object):
             Poscar(s).write_file(poscar)
                     
             print("Something is wrong")
-            
-    def temporary(self, formula, spgp, atomlist):
-        
-        return
     
     def kpoints(self, kppa=False):
         """
@@ -373,6 +375,41 @@ class VASPSetUp(object):
         if parallel:
             replace_line(new_script, 6, '#SBATCH --nodes=' + str(parallel) + '\n')
             
+    def els_to_amts(self):
+        """
+        Args:
+            None
+        Returns:
+            dictionary of {element (str) : number in calculated structure (int)}
+        """
+        return els_to_amts(self.ordered_els_from_poscar(), os.path.join(self.dir, 'POSCAR'))
+    
+    def nsites(self):
+        """
+        Args:
+            None
+        Returns:
+            number (int) of ions in calculated structure
+        """
+        return nsites(self.els_to_amts())
+    
+    def idxs_to_els(self):
+        """
+        Args:
+            None
+        Returns:
+            Dictionary of indexs in structure to the element at that index
+        """
+        return idxs_to_els(self.ordered_els_from_poscar(), self.els_to_amts(), self.nsites())
+    
+    def els_to_idxs(self):
+        """
+        Args:
+            None
+        Returns:
+            Dictionary of elemets with indexs
+        """
+        return els_to_idxs(self.idxs_to_els())
             
 class VASPBasicAnalysis(object):
     """
