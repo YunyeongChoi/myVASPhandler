@@ -1,5 +1,6 @@
 import json
 import numpy as np
+import os
 
 def els_to_amts(ordered_els, fstructure):
     """
@@ -102,7 +103,25 @@ def write_json(d, fjson):
         json.dump(d, f)
     return d  
 
+def gcd(a,b):
+    """
+    Args:
+        a (float, int) - some number
+        b (float, int) - another number
+    
+    Returns:
+        greatest common denominator (int) of a and b
+    """
+    while b:
+        a, b = b, a%b
+    return a    
+
 def atomic_valences_data():
-    DATA_PATH = '/global/u2/y/yychoi/MYCODES/atomic_valence.json'
+    DATA_PATH = '/global/homes/y/yychoi/CODES/myVASPhandler/atomic_valence.json'
+    with open(DATA_PATH) as f:
+        return json.load(f)
+
+def atomic_electronegativities_data():
+    DATA_PATH = '/global/homes/y/yychoi/CODES/myVASPhandler/atomic_electronegativities.json'
     with open(DATA_PATH) as f:
         return json.load(f)
