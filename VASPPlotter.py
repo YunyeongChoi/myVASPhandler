@@ -372,3 +372,106 @@ class Plotter(object):
             plt.savefig('/global/cscratch1/sd/yychoi/JCESR/MgPostSpinels/Voltage/' + 'DOStest' + '.png')
             plt.show()
         return ax
+    
+    def cohp(self,
+             pairs_to_plot=['total'],
+             colors_and_labels = {'total' : {'color' : 'black','label' : 'total'}},
+             tdos=False,                                        
+             xlim=(-0.1, 0.1), ylim=(-10, 4), 
+             xticks=(False, [-0.5, 0.5]), yticks=(False, [-10, 4]),
+             xlabel=r'$-COHP/e^-$', ylabel=r'$E-E_F\/(eV)$',
+             legend=True,
+             smearing=1,
+             shift=0, normalization='electron',
+             show=False,
+             zero_line='horizontal'):
+        """
+        Args:
+            calc_dir (str) - path to calculation with DOSCAR
+            pairs_to_plot (list) - list of 'el1_el2' to plot and/or 'total'
+            colors_and_labels (dict) - {pair (str) : {'color' : color (str), 'label' : label (str)}}
+            tdos (str or bool) - if not False, 'DOSCAR' or 'DOSCAR.losbter' to retrieve tDOS from
+            xlim (tuple) - (xmin (float), xmax (float))
+            ylim (tuple) - (ymin (float), ymax (float))
+            xticks (tuple) - (bool to show label or not, (xtick0, xtick1, ...))
+            yticks (tuple) - (bool to show label or not, (ytick0, ytick1, ...))
+            xlabel (str) - x-axis label
+            ylabel (str) - y-axis label
+            legend (bool) - include legend or not
+            smearing (float or False) - std. dev. for Gaussian smearing of DOS or False for no smearing
+            shift (float or 'Fermi') - if 'Fermi', make Fermi level 0; else shift energies by shift
+            normalization ('electron', 'atom', or False) - divide populations by number of electrons, number of atoms, or not at all
+            show (bool) - if True, show figure; else just return ax
+            zero_line (str) - if 'horizontal', 'vertical', 'both', or False
+                       
+        Returns:
+            matplotlib axes object
+        """
+        self.set_rc_params()    
+        if show == True:
+            fig = plt.figure(figsize=(2.5,4))
+            ax = plt.subplot(111)         
+        if normalization == 'electron':
+            normalization = VASPBasicAnalysis(self.calc_dir).params_from_outcar(num_params=['NELECT'], str_params=[])['NELECT']
+        elif normalization == 'atom':
+            normalization = VASPBasicAnalysis(self.calc_dir).nsites
+        occupied_up_to = shift
+        dos_lw = 1
+        if isinstance(tdos, str):
+            d = VASPDOSAnalysis(self.calc_dir, doscar=tdos).energies_to_populations()
+            if 'lobster' not in tdos:
+                shift -= VASPBasicAnalysis(self.calc_dir).Efermi()
+            d = ProcessDOS(d, shift=shift, normalization=normalization).energies_to_populations
+            energies = sorted(list(d.keys()))
+            populations = [d[E] for E in energies]
+            occ_energies = [E for E in energies if E <= occupied_up_to]
+            occ_populations = [d[E] for E in occ_energies]
+            unocc_energies = [E for E in energies if E > occupied_up_to]
+            unocc_populations = [d[E] for E in unocc_energies]    
+            color = 'red'
+            label = 'tDOS'
+            if smearing:
+                occ_populations = gaussian_filter1d(occ_populations, smearing)
+                unocc_populations = gaussian_filter1d(unocc_populations, smearing)
+            ax = plt.plot(occ_populations, occ_energies, color=color, label=label, alpha=0.9, lw=dos_lw)
+            ax = plt.plot(unocc_populations, unocc_energies, color=color, label='__nolegend__', alpha=0.9, lw=dos_lw)                    
+            ax = plt.fill_betweenx(occ_energies, occ_populations, color=color, alpha=0.2, lw=0)         
+        for pair in pairs_to_plot:
+            color = colors_and_labels[pair]['color']
+            label = colors_and_labels[pair]['label']
+            d = LOBSTERAnalysis(self.calc_dir).energies_to_populations(element_pair=pair)
+            flip_sign = True
+            d = ProcessDOS(d, shift=0, 
+                           flip_sign=flip_sign,
+                           normalization=normalization).energies_to_populations
+            energies = sorted(list(d.keys()))
+            populations = [d[E] for E in energies]
+            occ_energies = [E for E in energies if E <= occupied_up_to]
+            occ_populations = [d[E] for E in occ_energies]
+            unocc_energies = [E for E in energies if E > occupied_up_to]
+            unocc_populations = [d[E] for E in unocc_energies]
+            if smearing:
+                occ_populations = gaussian_filter1d(occ_populations, smearing)
+                unocc_populations = gaussian_filter1d(unocc_populations, smearing)
+            ax = plt.plot(occ_populations, occ_energies, color=color, label=label, alpha=0.9, lw=dos_lw)
+            ax = plt.plot(unocc_populations, unocc_energies, color=color, label='__nolegend__', alpha=0.9, lw=dos_lw) 
+            ax = plt.fill_betweenx(occ_energies, occ_populations, color=color, alpha=0.2, lw=0)
+        ax = plt.xticks(xticks[1])
+        ax = plt.yticks(yticks[1])
+        if not xticks[0]:
+            ax = plt.gca().xaxis.set_ticklabels([])      
+        if not yticks[0]:
+            ax = plt.gca().yaxis.set_ticklabels([])
+        ax = plt.xlabel(xlabel)
+        ax = plt.ylabel(ylabel)
+        ax = plt.xlim(xlim)
+        ax = plt.ylim(ylim)
+        if zero_line in ['horizontal', 'both']:
+            ax = plt.plot(xlim, [0, 0], lw=1, ls='--', color='black')
+        if zero_line in ['vertical', 'both']:
+            ax = plt.plot([0, 0], ylim, lw=1, ls='--', color='black')      
+        if legend:
+            ax = plt.legend(loc='upper right')
+        if show:
+            plt.show()
+        return ax
