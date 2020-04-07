@@ -18,6 +18,7 @@ from scipy.integrate import simps, cumtrapz
 from scipy.ndimage.filters import gaussian_filter1d
 from shutil import copyfile
 from VASPHandyFunctions import *
+from CompAnalyzer import CompAnalyzer
 import argparse
 import gzip
 import sys
@@ -681,7 +682,7 @@ class VASPBasicAnalysis(object):
         vasprun = Vasprun(vaspxml)
         my_entry = vasprun.get_computed_entry(inc_structure=False)
         
-        return mpr.get_stability([my_entry])[0]['e_above_hull']
+        return mpr.get_stability([my_entry])[0]
     
     def Efermi(self, alphabeta=True):
         """
@@ -697,7 +698,17 @@ class VASPBasicAnalysis(object):
                     return float(line.split(':')[1].split('XC')[0].strip()) + float(line.split(':')[3])
                 elif 'E-fermi' in line and alphabeta == False:
                     return float(line.split(':')[1].split('XC')[0].strip())
-                    
+                
+    def Volume(self):
+        """
+        Args:
+            None
+        Returns:
+            Volume/number of atoms
+        """
+        contcar = os.path.join(self.dir, 'CONTCAR')
+        structure = Structure.from_file(contcar)
+        return structure.volume/self.nsites()
 
 class VASPDOSAnalysis(object):
     """
@@ -973,3 +984,179 @@ class ProcessDOS(object):
             summary['kurtosis'] = simps(populations*energies**4, energies) / summary['area']
         return summary
 
+class LOBSTERAnalysis(object):
+    """
+    Convert COHPCAR, COOPCAR to dictionary
+    """
+    
+    def __init__(self, calc_dir, lobster='COHPCAR.lobster'):
+        """
+        Args:
+            calc_dir(str) - path to calculation with LOBSTER output
+            lobster(str) - COHPCAR.lobster or COOPCAR.lobster
+        Returns:
+            calc_dir
+            path to LOBSTER output
+        """
+        self.calc_dir = calc_dir
+        self.lobster = os.path.join(calc_dir, lobster)
+        
+    def pair_dict(self, fjson=False, remake=False):
+        """
+        Args:
+            fjson (str or False) - path to json to write; if False, writes to calc_dir/lobPAIRS.json
+            remake (bool) - if True, regenerate json; else read json
+        Returns:
+            dictionary of {pair index (int) : {'els' : (el1, el1) (str), 
+                                               'sites' : (structure index for el1, structure index for el2) (int),
+                                               'orbitals' : (orbital for el1, orbital for el2) (str) ('all' if all orbitals summed),
+                                               'dist' : distance in Ang (float)}
+                                               'energies' : [] (placeholder),
+                                               'populations' : [] (placeholder)}
+        """
+        if not fjson:
+            fjson = os.path.join(self.calc_dir, 'lobPAIRS.json')
+        if remake or not os.path.exists(fjson) or (read_json(fjson) == {}):
+            lobster = self.lobster
+            if not os.path.exists(lobster):
+                print('%s doenst exist' %lobster)
+                return np.nan
+            data = {}
+            with open(lobster) as f:
+                count = 0
+                idx_count = 0
+                for line in f:
+                    if count < 3:
+                        count += 1
+                        continue
+                    elif line[:3] == 'No.':
+                        idx_count += 1
+                        pair_idx = idx_count
+                        if '[' not in line: 
+                            el_site1 = line.split(':')[1].split('->')[0]
+                            el_site2 = line.split(':')[1].split('->')[1].split('(')[0]
+                            orb1, orb2 = 'all', 'all' 
+                        else:
+                            el_site1 = line.split(':')[1].split('->')[0].split('[')[0]
+                            el_site2 = line.split(':')[1].split('->')[1].split('(')[0].split('[')[0]
+                            orb1, orb2 = line.split('[')[1].split(']')[0], line.split('->')[1].split('[')[1].split(']')[0]  
+                        dist = float(line.split('(')[1].split(')')[0])
+                        el1, el2 = CompAnalyzer(el_site1).els[0], CompAnalyzer(el_site2).els[0]
+                        site1, site2 = int(el_site1.split(el1)[1]), int(el_site2.split(el2)[1]) 
+                        data[pair_idx] = {'els' : (el1, el2),
+                                          'sites' : (site1, site2),
+                                          'orbitals' : (orb1, orb2),
+                                          'dist' : dist,
+                                          'energies' : [],
+                                          'populations' : []}
+                    else:
+                        return write_json(data, fjson)  
+        else:
+            data = read_json(fjson)
+            new = {}
+            for i in data:
+                new[int(i)] = {}
+                for j in data[i]:
+                    if type(data[i][j]) == list and data[i][j] != []:
+                        new[int(i)][j] = tuple(data[i][j])
+                    else:
+                        new[int(i)][j] = data[i][j]
+            return new
+        
+    def detailed_dos_dict(self, fjson=False, remake=False, fjson_pairs=False):
+        """
+        Args:
+            fjson (str) - path to json to write; if False, writes to calc_dir/COHP.json or COOP.json
+            remake (bool) - if True, regenerate json; else read json   
+        Returns:
+            dictionary of COHP/COOP information
+                first_key = energy (float)
+                next_keys = each unique el1_el2 interaction and also total
+                for total, value is the total population
+                for each sorted(el1_el2) interaction, keys are each specific sorted(site1_site2) interaction for those elements and total
+                    populations are as generated by LOBSTER
+        """
+        if not fjson:
+            fjson = os.path.join(self.lobster.replace('CAR.lobster', '.json')) # Making COHP.json file
+        if remake or not os.path.exists(fjson) or (read_json(fjson) == {}):
+            lobster = self.lobster # save directory to lobster variable
+            if not fjson_pairs: # if lobPAIRS.json is not exists, save lobPAIRS.json directoy to fjson_pairs variable
+                fjson_pairs = os.path.join(self.calc_dir, 'lobPAIRS.json')
+            data = self.pair_dict(fjson=fjson_pairs, remake=False) # make lobPAIRS.json and read
+            if not isinstance(data, dict):
+                return np.nan
+            with open(lobster) as f:
+                count = 0
+                for line in f:
+                    if (count < 3) or (line[:3] == 'No.'):
+                        count += 1
+                        continue
+                    else:
+                        line = line.split(' ') # check line start with energy value and save to values
+                        values = [v for v in line if v != ''] 
+                        energy = float(values[0]) # First value of the line is energy - check the manual 
+                        for pair in data:
+                            idx_up = 2 + int(pair) * 2 - 1 # line (energy, pCOHP-total(up), lpCOHP-total(up), ... ) total 4N+5
+                            idx_down = idx_up + 2 * len(data) + 2
+                            population_up = float(values[idx_up])
+                            population_down = float(values[idx_down])     
+                            population = population_up + population_down
+                            data[pair]['energies'].append(energy)
+                            data[pair]['populations'].append(population) # append pCOHP-1,2 ...
+            new = {}
+            energies = data[1]['energies'] # Get energy list
+            element_combinations = list(set(['_'.join(sorted(data[pair]['els'])) for pair in data])) # Make combinaiton of elements in json file ex) O_O, O_Sn
+            for i in range(len(energies)): # iteration with energies
+                overall_total = 0
+                tmp1 = {}
+                for el_combo in element_combinations: # iterate with specific combination
+                    combo_total = 0
+                    pairs = [pair for pair in data if (tuple(el_combo.split('_')) == data[pair]['els'])] # find the pairs have specific combination
+                    if len(pairs) == 0:
+                        pairs = [pair for pair in data if (tuple(el_combo.split('_')[::-1]) == data[pair]['els'])] # For the case order is reversed
+                        sites = [data[pair]['sites'][::-1] for pair in pairs]
+                        orbitals = [data[pair]['orbitals'][::-1] for pair in pairs]
+                    else:
+                        sites = [data[pair]['sites'] for pair in pairs]
+                        orbitals = [data[pair]['orbitals'] for pair in pairs]
+                    tmp2 = {'_'.join([str(s) for s in site]) : {} for site in list(set(sites))} # make {'45_1': {}, ... } dictionary for each combination
+                    for j in range(len(pairs)):
+                        pair, site, orbital = pairs[j], sites[j], orbitals[j]
+                        population = data[pair]['populations'][i]
+                        if orbital == ('all', 'all'):
+                            combo_total += population
+                        site_key = '_'.join([str(s) for s in site])
+                        orb_key = '-'.join(orbital)
+                        tmp2[site_key][orb_key] = population # make {'45_1': {'all-all': population}, ... }
+                    tmp2['total'] = combo_total
+                    tmp1[el_combo] = tmp2 # make {'Mn-O' : {45_1': {'all-all': population}, ... }, ...}
+                    overall_total += combo_total
+                tmp1['total'] = overall_total
+                new[energies[i]] = tmp1
+            return write_json(new, fjson)
+        else:
+            data = read_json(fjson)
+            return {float(k) : data[k] for k in data}
+                    
+    def energies_to_populations(self, element_pair='total', site_pair='total', orb_pair='all-all', fjson=False, remake=False):
+        """
+        Args:
+            element_pair (str) - el1_el2 (alphabetical) or 'total'
+            site_pair (str) - site1_site2 (order corresponds with el1_el2) or 'total'
+            orb_pair (str) - orb1-orb2 (order corresponds with el1_el2) or 'all-all' for all orbitals
+            fjson (str or False) - path to json to write; if False, writes to calc_dir/DOS.json
+            remake (bool) - if True, regenerate dos_dict json; else read json            
+        
+        Returns:
+            dictionary of {energies (float) : populations (float)} for specified subset
+        """        
+        dos_dict = self.detailed_dos_dict(fjson, remake)
+        energies = sorted(list(dos_dict.keys()))
+        if element_pair != 'total':
+            if site_pair != 'total':
+                populations = [dos_dict[E][element_pair][site_pair][orb_pair] for E in energies]
+            else:
+                populations = [dos_dict[E][element_pair][site_pair] for E in energies]
+        else:
+            populations = [dos_dict[E][element_pair] for E in energies]
+        return dict(zip(energies, populations))
