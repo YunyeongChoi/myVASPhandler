@@ -110,6 +110,29 @@ class VASPSetUp(object):
                     f.write(' = '.join([k, str(user_incar_setting[k])])+'\n')
         else:
             return user_incar_setting
+        
+    def modify_incar(self, enforce={}):
+        """
+        Args:
+            enforce - Dictionary that contains INCAR options
+        ReturnsL
+            modified INCAR and old_INCAR in directory
+        """
+        incar = os.path.join(self.dir, 'INCAR')
+        old_incar = os.path.join(self.dir, 'old_INCAR')
+        copyfile(incar, old_incar)
+        with open(incar, 'w') as new:
+            with open(old_incar) as old:
+                for line in old:
+                    skip = False
+                    for key in enforce:
+                        if key in line:
+                            skip = True
+                    if not skip:
+                        new.write(line)
+                for key in enforce:
+                    line = ' = '.join([str(key), str(enforce[key])])+'\n'
+                    new.write(line)
 
     def structure_from_mp(self, formula, spgp, write_file=False, KEY='R0CmAuNPKWzrUo8Z'):
         """
@@ -358,23 +381,43 @@ class VASPSetUp(object):
                     for line in g:
                         f.write(line)
                         
-    def copy_script(self, name=False, time=False, node=False, parallel=False):
+    def copy_script(self, name=False, time=False, node=False, parallel=False, lobster=False):
         
         script = '/global/u2/y/yychoi/script'
-        new_script = os.path.join(self.dir, 'script')
-        copyfile(script, new_script)    
-        defaultname = [v for v in self.dir.split('/') if v != '']
+        lobscript = '/global/u2/y/yychoi/lobscript'
+        if lobster == False:
+            new_script = os.path.join(self.dir, 'script')
+            defaultname = self.dir.split('/')[-1]
+            copyfile(script, new_script)
+        else:
+            new_script = os.path.join(self.dir, 'lobscript')
+            defaultname = 'lobster' + self.dir.split('/')[-1]
+            copyfile(lobscript, new_script)
         
         if name:
             replace_line(new_script, 2, '#SBATCH --job-name=' + name + '\n')
         else:
-            replace_line(new_script, 2, '#SBATCH --job-name=' + defaultname[-1] + '\n')
+            replace_line(new_script, 2, '#SBATCH --job-name=' + defaultname + '\n')
         if time:
             replace_line(new_script, 3, '#SBATCH --time=' + str(time) + '\n')
         if node:
             replace_line(new_script, 7, '#SBATCH --ntasks-per-node=' + str(node) + '\n')
         if parallel:
             replace_line(new_script, 6, '#SBATCH --nodes=' + str(parallel) + '\n')
+            
+    def write_lobsterin(self, min_d=1.0, max_d=5.0, min_E=-60, max_E=20, basis='pbeVaspFit2015', orbitalwise=False):
+        
+        flob = os.path.join(self.dir, 'lobsterin')
+        with open(flob, 'w') as f:
+            f.write(' '.join(['cohpGenerator', 'from', str(min_d), 'to', str(max_d)])+'\n')
+            f.write(' '.join(['COHPstartEnergy', str(min_E)])+'\n')
+            f.write(' '.join(['COHPendEnergy', str(max_E)])+'\n')
+            f.write(' '.join(['basisSet', basis])+'\n')
+            f.write(' '.join(['gaussianSmearingWidth', '0.01'])+'\n')
+            f.write('userecommendedbasisfunctions\n')
+            f.write('DensityOfEnergy\n')
+            f.write('BWDF\n')
+            f.write('BWDFCOHP\n')
             
     def els_to_amts(self):
         """
@@ -555,7 +598,7 @@ class VASPBasicAnalysis(object):
                         return False
         return True
 
-    def second_run(self):
+    def second_run(self, lobster = False):
         """
         Args:
             directory that finished geometric optimization
@@ -571,17 +614,33 @@ class VASPBasicAnalysis(object):
         stuff = [v for v in contcar.split('/' ) if v != '']
         count = [w for w in stuff[-2].split('_') if w !='']
         
-        if count[-1] == 'first':
+        if count[-1] == 'first' and lobster == False:
             poscar = self.dir[:-5] + 'second'
             if os.path.exists(poscar) == False:
                 os.mkdir(poscar)
             copyfile(contcar, os.path.join(poscar, 'POSCAR'))
         
-        obj = VASPSetUp(poscar)
-        obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
-        obj.kpoints(1000)
-        obj.potcar(MP=True, machine='cori')
-        obj.copy_script(time='03:00:00')
+            obj = VASPSetUp(poscar)
+            obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
+            obj.kpoints(1000)
+            obj.potcar(MP=True, machine='cori')
+            obj.copy_script(time='03:00:00')
+        
+        elif count[-1] == 'first' and lobster == True:
+            poscar = self.dir[:-5] + 'second_lobster'
+            if os.path.exists(poscar) == False:
+                os.mkdir(poscar)
+            copyfile(contcar, os.path.join(poscar, 'POSCAR'))
+            
+            old_nbands = self.nbands()
+            obj = VASPSetUp(poscar)
+            obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
+            obj.modify_incar(enforce = {'NBANDS' : int(2*old_nbands)})
+            obj.kpoints(1000)
+            obj.potcar(MP=True, machine='cori')
+            obj.copy_script(time='03:00:00')
+            obj.write_lobsterin()
+            obj.copy_script(lobster=True)
     
     def els_to_amts(self):
         """
