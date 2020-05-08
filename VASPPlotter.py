@@ -34,13 +34,13 @@ class Plotter(object):
                   'savefig.bbox' : 'tight',
                   'xtick.labelsize' : 30,
                   'ytick.labelsize' : 30,
-                  'xtick.major.size' : 8,
-                  'xtick.minor.size' : 6,
-                  'ytick.major.size' : 8,
-                  'ytick.minor.size' : 6,
-                  'xtick.major.width' : 1.5,
+                  'xtick.major.size' : 5,
+                  'xtick.minor.size' : 3,
+                  'ytick.major.size' : 5,
+                  'ytick.minor.size' : 3,
+                  'xtick.major.width' : 1,
                   'xtick.minor.width' : 0.5,
-                  'ytick.major.width' : 1.5,
+                  'ytick.major.width' : 1,
                   'ytick.minor.width' : 0.5,
                   'xtick.top' : True,
                   'ytick.right' : True,
@@ -139,61 +139,70 @@ class Plotter(object):
 
         return
         
-    def ehullplotter(self, spgp, ionlist = ['Na', 'Mg'], ylabel=r'$E^{hull}(meV/atom)$', 
-                     xlim = (0,1.01), ylim=(0,300), xticks=(True, np.arange(0, 1.01, 0.5)), yticks=(True, np.arange(0, 501, 100)),
-                     calstructure = {'Co0.5Sn1.5O4': {'color': 'royalblue'}, 'CrSnO4': {'color': 'darkorange'}, 'CrTiO4': {'color': 'forestgreen'},
-                                     'Fe0.5Ti1.5O4': {'color': 'dimgray'}, 'MnSnO4': {'color': 'firebrick'}, 'Ni0.5Sn1.5O4': {'color': 'darkorchid'},
+    def ehullplotter(self, spgp, ionlist = ['Na', 'Li', 'Mg'], ylabel=r'$E^{hull}(meV/atom)$', fjson = False, remake=False, 
+                     xlim = [0, 2.05], ylim=[0, 300], xticks=(True, np.arange(0, 2.05, 0.5)), yticks=(True, np.arange(0, 301, 100)),
+                     calstructure = {'CrSnO4': {'color': 'darkorange'}, 'CrTiO4': {'color': 'forestgreen'},
+                                     'Fe0.5Ti1.5O4': {'color': 'dimgray'}, 'MnSnO4': {'color': 'firebrick'}, 
                                      'MnTiO4': {'color': 'darkkhaki'}},
                      params = {'figure.figsize': [12, 10]}):
         
         self.set_rc_params()
         for p in params:
             mpl.rcParams[p] = params[p]
-        caldir = []
-        totaldictionary = {}
         
-        structurelist = [x[0] for x in os.walk(self.calc_dir)]
-        for path in structurelist:
-            if path.split('/')[-2] == 'MgPostSpinels' and path.split('/')[-1] in calstructure:
-                caldir.append(path)
-        
-        for ion in ionlist:
-            totaldictionary[ion] = {}
-            for dirs in caldir:
-                structurelist = [x[0] for x in os.walk(dirs)]
-                label = dirs.split('/')[-1]
-                totaldictionary[ion][label] = {}
-                for path in structurelist:
-                    if path.split('/')[-1].split('_')[-1] == 'second' and path.split('/')[-1].split('_')[-2] == spgp:
-                        properdir = VASPBasicAnalysis(path)
-                        if ion in properdir.els_to_amts().keys():
-                            totaldictionary[ion][label][properdir.els_to_amts()[ion]] = properdir.ehullmp()
-                        elif ionlist[0] not in properdir.els_to_amts().keys() and ionlist[1] not in properdir.els_to_amts().keys():
-                            totaldictionary[ion][label][0] = properdir.ehullmp()
-                totaldictionary[ion][label] = dict(sorted(totaldictionary[ion][label].items()))
-                for key in totaldictionary[ion][label]:
-                    newkey = key / max(totaldictionary[ion][label].keys())
-                    totaldictionary[ion][label][newkey] = totaldictionary[ion][label].pop(key)
-                    totaldictionary[ion][label][newkey] = 1000 * totaldictionary[ion][label][newkey]
+        if not fjson:
+            fjson = os.path.join(self.calc_dir, 'ehulldata' + spgp + '_' + ionlist[0] + '_' + ionlist[1] + '.json')
+        if remake or not os.path.exists(fjson) or (read_json(fjson) == {}):        
+            caldir = []
+            totaldictionary = {}
+            structurelist = [x[0] for x in os.walk(self.calc_dir)]
+            for path in structurelist:
+                if path.split('/')[-2] == 'MgPostSpinels' and path.split('/')[-1] in calstructure:
+                    caldir.append(path)
+            for ion in ionlist[0:2]:
+                totaldictionary[ion] = {}
+                for dirs in caldir:
+                    structurelist = [x[0] for x in os.walk(dirs)]
+                    label = dirs.split('/')[-1]
+                    totaldictionary[ion][label] = {}
+                    for path in structurelist:
+                        if path.split('/')[-1].split('_')[-1] == 'lobster' and path.split('/')[-1].split('_')[-3] == spgp:
+                            properdir = VASPBasicAnalysis(path)
+                            if ion in properdir.els_to_amts().keys():
+                                totaldictionary[ion][label][properdir.els_to_amts()[ion]] = properdir.ehullmp()['e_above_hull']
+                            elif ionlist[0] not in properdir.els_to_amts().keys() and ionlist[1] not in properdir.els_to_amts().keys() and ionlist[2] not in properdir.els_to_amts().keys():
+                                totaldictionary[ion][label][0] = properdir.ehullmp()['e_above_hull']
+                    totaldictionary[ion][label] = dict(sorted(totaldictionary[ion][label].items()))
+                    for key in totaldictionary[ion][label]:
+                        newkey = key / max(totaldictionary[ion][label].keys())
+                        totaldictionary[ion][label][newkey] = totaldictionary[ion][label].pop(key)
+                        totaldictionary[ion][label][newkey] = 1000 * totaldictionary[ion][label][newkey]
+            write_json(totaldictionary, fjson)
+        else:
+            totaldictionary = read_json(fjson)
 
         for i, ion in enumerate(totaldictionary):
+            print(ion)
             ax = plt.subplot(int('1' + str(len(totaldictionary)) + str(i+1)))
             for struc in totaldictionary[ion]:
+                print(*zip(*sorted(totaldictionary[ion][struc].items())))
                 ax = plt.plot(*zip(*sorted(totaldictionary[ion][struc].items())), marker = '.', label = struc, **calstructure[struc])
             ax = plt.xlabel(r'$X_{' + ion + '}$')
             ax = plt.subplots_adjust(hspace=0.000, wspace=0.000)
             ax = plt.xlim(xlim)
             ax = plt.ylim(ylim)
-            ax = plt.xticks(xticks[1])
+            # ax = plt.xticks(xticks[1])
             ax = plt.yticks(yticks[1])
             if i != 0:
                 ax = plt.gca().yaxis.set_ticklabels([])
             if i == 0:
                 ax = plt.gca().invert_xaxis()
                 ax = plt.ylabel(ylabel)
-                ax = plt.legend(loc='upper left')
-        plt.suptitle('Stability in Phase Diagram- ' + spgp, y=0.96)
-        plt.savefig('/global/cscratch1/sd/yychoi/JCESR/MgPostSpinels/' + 'Ehulltest' + '.png')
+                ax = plt.legend(loc='lower left')
+            ax = plt.plot(xlim, [0, 0], lw=1, ls='--', color='black')
+        plt.suptitle('E hull difference (fd3m - pnma)', y=0.96)
+        # plt.suptitle('Stability in Phase Diagram- ' + spgp, y=0.96)
+        plt.savefig('/global/cscratch1/sd/yychoi/JCESR/MgPostSpinels/' + 'Ehull' + spgp + '.png')
         plt.show()
         return totaldictionary
     
@@ -373,16 +382,15 @@ class Plotter(object):
             plt.show()
         return ax
     
-    def cohp(self,
+    def cohp(self, structure = 'MnTiO4',
              pairs_to_plot=['total'],
-             colors_and_labels = {'total' : {'color' : 'black','label' : 'total'}},
-             tdos=False,                                        
-             xlim=(-0.1, 0.1), ylim=(-10, 4), 
-             xticks=(False, [-0.5, 0.5]), yticks=(False, [-10, 4]),
-             xlabel=r'$-COHP/e^-$', ylabel=r'$E-E_F\/(eV)$',
+             colors_and_labels = {'total' : {'color' : 'black','label' : 'total'}},                                  
+             xlim=(-0.5, 0.5), ylim=(-10, 0), 
+             xticks=(False, np.arange(-0.5, 0.5, 0.2)), yticks=(False, np.arange(-10, 0.1, 2)),
+             xlabel=r'$-COHP/bond$', ylabel=r'$E-E_F\/(eV)$',
              legend=True,
              smearing=1,
-             shift=0, normalization='electron',
+             shift=0, normalization='bonds',
              show=False,
              zero_line='horizontal'):
         """
@@ -407,71 +415,73 @@ class Plotter(object):
         Returns:
             matplotlib axes object
         """
-        self.set_rc_params()    
+        self.set_rc_params()
+        caldir = [self.calc_dir + '/' + structure + '_pnma_second_lobster', self.calc_dir + '/' + structure + '_fd3m_second_lobster']
         if show == True:
-            fig = plt.figure(figsize=(2.5,4))
-            ax = plt.subplot(111)         
-        if normalization == 'electron':
-            normalization = VASPBasicAnalysis(self.calc_dir).params_from_outcar(num_params=['NELECT'], str_params=[])['NELECT']
-        elif normalization == 'atom':
-            normalization = VASPBasicAnalysis(self.calc_dir).nsites
-        occupied_up_to = shift
-        dos_lw = 1
-        if isinstance(tdos, str):
-            d = VASPDOSAnalysis(self.calc_dir, doscar=tdos).energies_to_populations()
-            if 'lobster' not in tdos:
-                shift -= VASPBasicAnalysis(self.calc_dir).Efermi()
-            d = ProcessDOS(d, shift=shift, normalization=normalization).energies_to_populations
-            energies = sorted(list(d.keys()))
-            populations = [d[E] for E in energies]
-            occ_energies = [E for E in energies if E <= occupied_up_to]
-            occ_populations = [d[E] for E in occ_energies]
-            unocc_energies = [E for E in energies if E > occupied_up_to]
-            unocc_populations = [d[E] for E in unocc_energies]    
-            color = 'red'
-            label = 'tDOS'
-            if smearing:
-                occ_populations = gaussian_filter1d(occ_populations, smearing)
-                unocc_populations = gaussian_filter1d(unocc_populations, smearing)
-            ax = plt.plot(occ_populations, occ_energies, color=color, label=label, alpha=0.9, lw=dos_lw)
-            ax = plt.plot(unocc_populations, unocc_energies, color=color, label='__nolegend__', alpha=0.9, lw=dos_lw)                    
-            ax = plt.fill_betweenx(occ_energies, occ_populations, color=color, alpha=0.2, lw=0)         
-        for pair in pairs_to_plot:
-            color = colors_and_labels[pair]['color']
-            label = colors_and_labels[pair]['label']
-            d = LOBSTERAnalysis(self.calc_dir).energies_to_populations(element_pair=pair)
-            flip_sign = True
-            d = ProcessDOS(d, shift=0, 
-                           flip_sign=flip_sign,
-                           normalization=normalization).energies_to_populations
-            energies = sorted(list(d.keys()))
-            populations = [d[E] for E in energies]
-            occ_energies = [E for E in energies if E <= occupied_up_to]
-            occ_populations = [d[E] for E in occ_energies]
-            unocc_energies = [E for E in energies if E > occupied_up_to]
-            unocc_populations = [d[E] for E in unocc_energies]
-            if smearing:
-                occ_populations = gaussian_filter1d(occ_populations, smearing)
-                unocc_populations = gaussian_filter1d(unocc_populations, smearing)
-            ax = plt.plot(occ_populations, occ_energies, color=color, label=label, alpha=0.9, lw=dos_lw)
-            ax = plt.plot(unocc_populations, unocc_energies, color=color, label='__nolegend__', alpha=0.9, lw=dos_lw) 
-            ax = plt.fill_betweenx(occ_energies, occ_populations, color=color, alpha=0.2, lw=0)
-        ax = plt.xticks(xticks[1])
-        ax = plt.yticks(yticks[1])
-        if not xticks[0]:
-            ax = plt.gca().xaxis.set_ticklabels([])      
-        if not yticks[0]:
-            ax = plt.gca().yaxis.set_ticklabels([])
-        ax = plt.xlabel(xlabel)
-        ax = plt.ylabel(ylabel)
-        ax = plt.xlim(xlim)
-        ax = plt.ylim(ylim)
-        if zero_line in ['horizontal', 'both']:
-            ax = plt.plot(xlim, [0, 0], lw=1, ls='--', color='black')
-        if zero_line in ['vertical', 'both']:
-            ax = plt.plot([0, 0], ylim, lw=1, ls='--', color='black')      
-        if legend:
-            ax = plt.legend(loc='upper right')
+            mpl.rcParams['font.size'] = 10
+            mpl.rcParams['xtick.labelsize'] = 10
+            mpl.rcParams['ytick.labelsize'] = 10
+            mpl.rcParams['legend.fontsize'] = 10
+            fig = plt.figure(figsize=(5, 7))
+        
+        for i, j in enumerate(caldir):
+            ax = plt.subplot(int('1' + str(len(caldir)) + str(i+1)))         
+            occupied_up_to = shift
+            dos_lw = 1
+            for count, pair in enumerate(pairs_to_plot):
+                color = colors_and_labels[pair]['color']
+                label = colors_and_labels[pair]['label']
+                if normalization == 'electron':
+                    normalization = VASPBasicAnalysis(j).params_from_outcar(num_params=['NELECT'], str_params=[])['NELECT']
+                elif normalization == 'atom':
+                    normalization = VASPBasicAnalysis(j).nsites
+                else:
+                    normalization = LOBSTERAnalysis(j).count_bonds()[label]
+                    print(normalization)
+                d = LOBSTERAnalysis(j).energies_to_populations(element_pair=pair)
+                bond = LOBSTERAnalysis(j).bond_strength(element_pair=pair, energy = list(ylim))
+                totalbond = LOBSTERAnalysis(j).bond_strength(element_pair=pair, average = False, energy = list(ylim))/normalization
+                flip_sign = True
+                d = ProcessDOS(d, shift=0, 
+                               flip_sign=flip_sign,
+                               normalization=normalization).energies_to_populations
+                energies = sorted(list(d.keys()))
+                populations = [d[E] for E in energies]
+                occ_energies = [E for E in energies if E <= occupied_up_to]
+                occ_populations = [d[E] for E in occ_energies]
+                unocc_energies = [E for E in energies if E > occupied_up_to]
+                unocc_populations = [d[E] for E in unocc_energies]
+                if smearing:
+                    occ_populations = gaussian_filter1d(occ_populations, smearing)
+                    unocc_populations = gaussian_filter1d(unocc_populations, smearing)
+                ax = plt.plot(occ_populations, occ_energies, color=color, label=label, alpha=0.9, lw=dos_lw)
+                ax = plt.plot(unocc_populations, unocc_energies, color=color, label='__nolegend__', alpha=0.9, lw=dos_lw) 
+                ax = plt.fill_betweenx(occ_energies, occ_populations, color=color, alpha=0.2, lw=0)
+                ax = plt.plot(xlim, [-bond, -bond], lw=1, ls='--', color=color)
+                ax = plt.annotate(label + ' Total = ' + str(-totalbond)[0:6] + 'eV', xy=(0.15, 0.05 + count/20), xytext=(-15,2), 
+                            ha='left', va='top', xycoords='axes fraction', textcoords='offset points', fontsize=10, color = color)
+            ax = plt.xticks(xticks[1])
+            ax = plt.yticks(yticks[1])
+            ax = plt.subplots_adjust(hspace=0.000, wspace=0.000)
+            if xticks[0]:
+                ax = plt.gca().xaxis.set_ticklabels([])      
+            if yticks[0] or i != 0:
+                ax = plt.gca().yaxis.set_ticklabels([])
+            ax = plt.xlabel(xlabel)
+            if i == 0:
+                ax = plt.ylabel(ylabel)
+                ax = plt.title(structure + '_pnma', y=1.03)
+            else:
+                ax = plt.title(structure + '_fd3m', y=1.03)
+            ax = plt.xlim(xlim)
+            ax = plt.ylim(ylim)
+            if zero_line in ['horizontal', 'both']:
+                ax = plt.plot(xlim, [0, 0], lw=1, ls='--', color='black')
+            if zero_line in ['vertical', 'both']:
+                ax = plt.plot([0, 0], ylim, lw=1, ls='--', color='black')
+            if legend:
+                ax = plt.legend(loc='upper right')
         if show:
+            plt.savefig('/global/cscratch1/sd/yychoi/JCESR/MgPostSpinels/' + structure + '_COHP' + '.png')
             plt.show()
         return ax
