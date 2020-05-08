@@ -100,6 +100,8 @@ class VASPSetUp(object):
             user_incar_setting['ALGO'] = 'All'
             user_incar_setting['ADDGRID'] = 'TRUE'
             user_incar_setting['ISMEAR'] = 0
+            user_incar_setting['LREAL'] = 'TRUE'
+            user_incar_setting['EDIFF'] = 1e-07
             
         for i in addtional_option:
             user_incar_setting[i] = addtional_option[i]
@@ -366,7 +368,6 @@ class VASPSetUp(object):
                              'Ti': 'Ti_pv', 'Tl': 'Tl_d', 'Tm': 'Tm_3', 'U': 'U', 
                              'V': 'V_pv', 'W': 'W_pv', 'Xe': 'Xe', 'Y': 'Y_sv', 
                              'Yb': 'Yb_2', 'Zn': 'Zn', 'Zr': 'Zr_sv'}
-            pot_dir = 'POT_GGA_PAW_PBE'
             if src != 'gga':
                 print('using GGA pots bc MP = TRUE')
         pots = os.path.join(path_to_pots, pot_dir)
@@ -374,12 +375,23 @@ class VASPSetUp(object):
         with open(fpotcar, 'w') as f:
             for el in els_in_poscar:
                 if (specific_pots == False) or (el not in specific_pots):
-                    pot_to_add = os.path.join(pots, el, 'POTCAR.gz')
+                    if src == 'gga_52':
+                        pot_to_add = os.path.join(pots, el, 'POTCAR')
+                    else:
+                        pot_to_add = os.path.join(pots, el, 'POTCAR.gz')
                 else:
-                    pot_to_add = os.path.join(pots, specific_pots[el], 'POTCAR.gz')
-                with gzip.open(pot_to_add, 'rt') as g:
-                    for line in g:
-                        f.write(line)
+                    if src == 'gga_52':
+                        pot_to_add = os.path.join(pots, specific_pots[el], 'POTCAR')
+                    else:
+                        pot_to_add = os.path.join(pots, specific_pots[el], 'POTCAR.gz')
+                if src == 'gga_52':
+                    with open(pot_to_add, 'rt') as g:
+                        for line in g:
+                            f.write(line)
+                else:
+                    with gzip.open(pot_to_add, 'rt') as g:
+                        for line in g:
+                            f.write(line)                    
                         
     def copy_script(self, name=False, time=False, node=False, parallel=False, lobster=False):
         
@@ -598,50 +610,76 @@ class VASPBasicAnalysis(object):
                         return False
         return True
 
-    def second_run(self, lobster = False):
+    def second_run(self, lobster = False, force = False, scan = False):
         """
         Args:
             directory that finished geometric optimization
         Returns:
             copy CONTCAR to POSCAR in second directory
             This is for the electroninc energy convergence after geometric optimization.
+        Need to polish. remove 'self.dir[:-6]' and generalize. 
         """
-        if not self.is_converged():
+        if not self.is_converged() and force == False:
             print('calcuation is not converged')
             return np.nan
         
+        elif not self.is_converged() and force == True:
+            print('calculation is not converged but keep going')
+        
         contcar = os.path.join(self.dir, 'CONTCAR')
+        wavecar = os.path.join(self.dir, 'WAVECAR')
         stuff = [v for v in contcar.split('/' ) if v != '']
         count = [w for w in stuff[-2].split('_') if w !='']
         
-        if count[-1] == 'first' and lobster == False:
-            poscar = self.dir[:-5] + 'second'
-            if os.path.exists(poscar) == False:
-                os.mkdir(poscar)
-            copyfile(contcar, os.path.join(poscar, 'POSCAR'))
-        
-            obj = VASPSetUp(poscar)
-            obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
+        if lobster == False:
+            if scan == True:
+                poscar = self.dir[:-6] + 'second_scan'
+                if os.path.exists(poscar) == False:
+                    os.mkdir(poscar)
+                copyfile(contcar, os.path.join(poscar, 'POSCAR'))
+                copyfile(wavecar, os.path.join(poscar, 'WAVECAR'))
+                obj = VASPSetUp(poscar)
+                obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
+                obj.potcar(MP=True, machine='cori', src='gga_52')
+            else:
+                poscar = self.dir[:-6] + 'second'
+                if os.path.exists(poscar) == False:
+                    os.mkdir(poscar)
+                copyfile(contcar, os.path.join(poscar, 'POSCAR'))
+                obj = VASPSetUp(poscar)
+                obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True, functional='scan')
+                obj.potcar(MP=True, machine='cori')
             obj.kpoints(1000)
             obj.potcar(MP=True, machine='cori')
             obj.copy_script(time='03:00:00')
         
-        elif count[-1] == 'first' and lobster == True:
-            poscar = self.dir[:-5] + 'second_lobster'
-            if os.path.exists(poscar) == False:
-                os.mkdir(poscar)
-            copyfile(contcar, os.path.join(poscar, 'POSCAR'))
-            
-            old_nbands = self.nbands()
-            obj = VASPSetUp(poscar)
-            obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
+        elif lobster == True:
+            if scan == True:
+                poscar = self.dir[:-6] + 'second_scan_lobster'
+                if os.path.exists(poscar) == False:
+                    os.mkdir(poscar)
+                copyfile(contcar, os.path.join(poscar, 'POSCAR'))
+                copyfile(wavecar, os.path.join(poscar, 'WAVECAR'))
+                old_nbands = self.nbands()
+                obj = VASPSetUp(poscar)
+                obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True, functional='scan')
+                obj.potcar(MP=True, machine='cori', src='gga_52')
+            else:
+                poscar = self.dir[:-6] + 'second_lobster'
+                if os.path.exists(poscar) == False:
+                    os.mkdir(poscar)
+                copyfile(contcar, os.path.join(poscar, 'POSCAR'))
+                old_nbands = self.nbands()
+                obj = VASPSetUp(poscar)
+                obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True, functional='scan')
+                obj.incar(geometry_opt=False, dos=True, MP=True, write_file=True)
+                obj.potcar(MP=True, machine='cori')
             obj.modify_incar(enforce = {'NBANDS' : int(2*old_nbands)})
             obj.kpoints(1000)
-            obj.potcar(MP=True, machine='cori')
-            obj.copy_script(time='03:00:00')
+            obj.copy_script(time='12:00:00')
             obj.write_lobsterin()
             obj.copy_script(lobster=True)
-    
+        
     def els_to_amts(self):
         """
         Args:
@@ -1048,7 +1086,7 @@ class LOBSTERAnalysis(object):
     Convert COHPCAR, COOPCAR to dictionary
     """
     
-    def __init__(self, calc_dir, lobster='COHPCAR.lobster'):
+    def __init__(self, calc_dir, lobster='COHPCAR.lobster', loblist='ICOHPLIST.lobster'):
         """
         Args:
             calc_dir(str) - path to calculation with LOBSTER output
@@ -1059,6 +1097,7 @@ class LOBSTERAnalysis(object):
         """
         self.calc_dir = calc_dir
         self.lobster = os.path.join(calc_dir, lobster)
+        self.loblist = os.path.join(calc_dir, loblist)
         
     def pair_dict(self, fjson=False, remake=False):
         """
@@ -1219,3 +1258,53 @@ class LOBSTERAnalysis(object):
         else:
             populations = [dos_dict[E][element_pair] for E in energies]
         return dict(zip(energies, populations))
+    
+    def bond_strength(self, element_pair='total', energy=[-10,0], average = True, fjson=False, remake=False):
+        
+        e_pop = self.energies_to_populations(element_pair=element_pair, fjson=fjson, remake=remake)
+        sorted_Es = sorted(list(e_pop.keys()))
+        energylist = [E for E in sorted_Es if E > energy[0] and E < energy[1]]
+        poplist = [abs(e_pop[E]) for E in sorted_Es if E > energy[0] and E < energy[1]]
+        energy_poplist = [E * e_pop[E] for E in sorted_Es if E > energy[0] and E < energy[1]]
+        bondstrength = cumtrapz(energy_poplist, energylist)
+        total_pop = cumtrapz(poplist, energylist)
+        if average:
+            average_bond = bondstrength[-1] / total_pop[-1]
+            return average_bond
+        else:
+            return bondstrength[-1]
+        
+    def count_bonds(self, element_pair='total', fjson=False, remake=False):
+        
+        if not fjson:
+            fjson = os.path.join(self.calc_dir, 'lobBONDS.json')
+        if remake or not os.path.exists(fjson) or (read_json(fjson) == {}):
+            loblist = self.loblist
+            if not os.path.exists(loblist):
+                print('%s doenst exist' %loblist)
+                return np.nan
+            bond_counting = {}
+            with open(loblist) as f:
+                count = 0
+                idx_count = 0
+                for line in f:
+                    if count < 1:
+                        count += 1
+                        continue
+                    split_list = [v for v in line.split(' ') if v != '']
+                    if split_list[0] == 'COHP#':
+                        break
+                    el_site1 = split_list[1]
+                    el_site2 = split_list[2]
+                    el1, el2 = CompAnalyzer(el_site1).els[0], CompAnalyzer(el_site2).els[0]
+                    bond_kind = el1 + '_' + el2
+                    if bond_kind in bond_counting:
+                        bond_counting[bond_kind] += 1
+                    else:
+                        bond_counting[bond_kind] = 1
+            return write_json(bond_counting, fjson)
+        else:
+            data = read_json(fjson)
+            return {k : data[k] for k in data}
+            
+                    
