@@ -1307,4 +1307,275 @@ class LOBSTERAnalysis(object):
             data = read_json(fjson)
             return {k : data[k] for k in data}
             
-                    
+            
+class JobSubmuission(object):
+    """
+    This class is for generating submission script, input files in calculation directiry and managing jobs.
+    Need to remove second_run method in VASPBasicAnalysis class
+    """
+    
+    def __init__(self, launch_dir, machine,
+                 sub_file='sub.sh',
+                 err_file='log.e',
+                 out_file='log.o',
+                 job_name='yyc_job',
+                 nodes=1,
+                 walltime='24:00:00',
+                 account=None,
+                 partition=None,
+                 priority=None,
+                 mem=None,
+                 vasp='vasp_std_knl',
+                 xcs=['pbe', 'scan'],
+                 calcs=['opt', 'sp'],
+                 command=False,
+                 status_file='status.o',
+                 postprocess={}):
+        self.launch_dir = launch_dir # Job launching directory
+        self.machine = machine # Job launching machine
+        self.sub_file = sub_file # submission script file name
+        self.err_file = err_file # error log file name
+        self.out_file = out_file # output log file name
+        self.job_name = job_name # Job name
+        self.nodes = nodes # number of nodes for parallel computing
+        self.walltime = walltime # time for calculation
+        self.account = account # I do not know why it is needed
+        self.partition = partition # type for calculation - form is qos-constraint; ex. regular-knl
+        self.priority = priority # calculation priority
+        self.mem = mem # I do not know why it is needed
+        self.vasp = vasp # type of VASP for calculation
+        self.xcs = xcs # type of pusedopotential for calculation
+        self.command = command # I do not know why it is needed
+        self.status_file = status_file # file statuse
+        self.calcs = calcs # type of calculation : {opt : geometric optimization, sp : single point}
+        self.postprocess = postprocess # type of postprocessing. Bader and LOBSTER is possible now.
+        
+    def manager(self):
+        """
+        Check the machine is proper or not
+        """
+        machine = self.machine
+        if machine in ['eagle', 'cori', 'stampede2', 'savio', 'bridges', 'lrc']:
+            return '#SBATCH'
+        else:
+            raise ValueError
+            
+    def options(self):
+        """
+        Set options for submission script
+        """
+        # Set machine and account
+        account, machine = self.account, self.machine
+        if not account:
+            if machine == 'eagle':
+                account = 'sngmd'
+            elif machine == 'cori':
+                account = 'm1268'
+            elif machine == 'stampede2':
+                account = 'TG-DMR970008S'
+            elif machine == 'savio':
+                account = 'fc_ceder'
+            elif machine == 'bridges':
+                account = 'mr7tu0p'
+            elif machine == 'lrc':
+                account='lr_ceder'
+            else:
+                raise ValueError
+                
+        # Set qos. type of nodes and number of nodes
+        partition = self.partition
+        if machine == 'cori':
+            qos, constraint = partition.split('-')
+            partition = None
+            if constraint == 'hsw':
+                tasks_per_node = 32
+            elif constraint == 'knl':
+                tasks_per_node = 64
+        else:
+            qos, constraint = None, None
+        if machine == 'eagle':
+            tasks_per_node = 36
+        elif machine == 'stampede2':
+            if 'skx' in partition:
+                tasks_per_node = 48
+            else:
+                tasks_per_node = 64
+        elif machine == 'savio':
+            if '2' in partition:
+                tasks_per_node = 24
+            else:
+                tasks_per_node = 20
+        elif machine == 'bridges':
+            tasks_per_node = 28
+        elif machine == 'lrc':
+            tasks_per_node = 28
+        priority = self.priority
+        if priority == 'low':
+            qos = 'low'
+            
+        # Set job name, mem, err, out, walltime, nodes, ntask
+        job_name, mem, err_file, out_file, walltime, nodes= self.job_name, self.mem, self.err_file, self.out_file, self.walltime, self.nodes
+        ntasks = int(nodes*tasks_per_node)
+        nodes = None if machine != 'stampede2' else nodes
+        if machine == 'savio':
+            if (':' not in walltime) or (walltime.split(':')[1] == '30'):
+                qos = 'savio_debug'
+            else:
+                qos = 'savio_normal'
+        if machine == 'lrc':
+            qos = 'condo_ceder'
+            
+        # collection options and return variables
+        slurm_options = {'account' : account,
+                         'constraint' : constraint if constraint != 'hsw' else 'haswell',
+                         'error' : err_file,
+                         'job-name' : job_name,
+                         'mem' : mem,
+                         'ntasks' : ntasks,
+                         'output' : out_file,
+                         'partition' : partition,
+                         'qos' : qos,
+                         'time' : walltime,
+                         'nodes' : nodes}
+        return slurm_options
+    
+    def vasp_dir(self):
+        """
+        Set VASP execautable dicrectory - only for cori now
+        """
+        machine = self.machine
+        partition = self.partition
+        if machine == 'cori':
+            home_dir = '/global/homes/y/yychoi/bin/VASP_20190930/'
+            if 'knl' in partition:
+                vasp_dir = os.path.join(home_dir, 'KNL', 'vasp.5.4.4_vtst178_with_DnoAugXCMeta')
+            elif 'hsw' in partition:
+                vasp_dir = os.path.join(home_dir, 'Haswell', 'vasp.5.4.4_vtst178_with_DnoAugXCMeta')
+        else:
+            raise ValueError
+        return vasp_dir
+    
+    def mpi_command(self):
+        """
+        Set mpi run command for each machine
+        """
+        machine = self.machine
+        if machine == 'stampede2':
+            return 'ibrun'
+        elif machine in ['cori', 'eagle']:
+            return 'srun'
+        elif machine in ['savio', 'bridges', 'lrc']:
+            return 'mpirun'
+        else:
+            raise ValueError
+
+    def vasp_command_modifier(self):
+        machine, partition = self.machine, self.partition
+        if (machine == 'cori') and ('knl' in partition):
+            return '-c4 --cpu_bind=cores'
+        elif (machine == 'cori') and ('hsw' in partition):
+            return '-c2 --cpu_bind=cores'
+        else:
+            return ''
+        
+    def vasp_command(self):
+        """
+        Write vasp execute commandline
+        """
+        modifier = self.vasp_command_modifier()
+        mpi_command = self.mpi_command()
+        vasp_dir = self.vasp_dir()
+        vasp = self.vasp
+        vasp = os.path.join(vasp_dir, vasp)
+        options = self.options()
+        ntasks = options['ntasks']
+        return '\n%s -n %s %s %s > vasp.out\n' % (mpi_command, str(ntasks), modifier, vasp)
+    
+    def bader_command(self):
+        """
+        Write Bader charge analysis command
+        """
+        machine = self.machine
+        if machine == 'eagle':
+            home_dir = ''
+        elif machine == 'savio':
+            home_dir = ''
+        elif machine == 'bridges':
+            home_dir = ''
+        elif machine == 'cori':
+            home_dir = '/global/homes/y/yychoi'
+        elif machine == 'lrc':
+            home_dir = ''
+        return '\n%s/bin/chgsum.pl AECCAR0 AECCAR2\n%s/bin/bader CHGCAR -ref CHGCAR_sum\n' % (home_dir, home_dir)
+    
+    def lobster_command(self):
+        """
+        Write LOBSTER analysis command
+        """
+        machine = self.machine
+        if machine == 'eagle':
+            home_dir = ''
+        elif machine == 'savio':
+            home_dir = ''
+        elif machine == 'bridges':
+            home_dir = ''
+        elif machine == 'cori':
+            home_dir = '/global/homes/y/yychoi'
+        elif machine == 'lrc':
+            home_dir = ''
+        return '\n%s/bin/lobster-3.2.0\n' % home_dir
+    
+    def write_lobsterin(self, calc_dir, min_d=1.0, max_d=5.0, min_E=-60, max_E=20, basis='pbeVaspFit2015', orbitalwise=False):
+        """
+        Need to remove same function in VASPSetUp
+        """
+        flob = os.path.join(calc_dir, 'lobsterin')
+        with open(flob, 'w') as f:
+            f.write(' '.join(['cohpGenerator', 'from', str(min_d), 'to', str(max_d)])+'\n')
+            f.write(' '.join(['COHPstartEnergy', str(min_E)])+'\n')
+            f.write(' '.join(['COHPendEnergy', str(max_E)])+'\n')
+            f.write(' '.join(['basisSet', basis])+'\n')
+            vsu = VASPSetUp(calc_dir)
+            vba = VASPBasicAnalysis(calc_dir)
+            sigma = vba.params_from_incar()
+            if 'SIGMA' in sigma:
+                sigma = sigma['SIGMA']
+                f.write(' '.join(['gaussianSmearingWidth', str(sigma)])+'\n')
+            f.write('userecommendedbasisfunctions\n')
+            f.write('DensityOfEnergy\n')
+            f.write('BWDF\n')
+            f.write('BWDFCOHP\n')
+            
+    def calc_dirs(self):
+        """
+        Make calculation directories - {pesudopotential: {type of calculation: {Directory name & Convergence}}}
+        Not making Launch directory - Need to write separately
+        """
+        calcs = self.calcs
+        launch_dir = self.launch_dir
+        xcs = self.xcs
+        info = {xc : {calc : {'dir' : os.path.join(launch_dir, xc, calc)} for calc in calcs} for xc in xcs}
+        for xc in xcs:
+            xc_dir = os.path.join(launch_dir, xc)
+            if not os.path.exists(xc_dir):
+                os.mkdir(xc_dir)
+            for calc in calcs:
+                if calc == 'neb':
+                    calc_dir = launch_dir
+                else:
+                    calc_dir = os.path.join(xc_dir, calc)
+                if not os.path.exists(calc_dir):
+                    os.mkdir(calc_dir)
+                outcar = os.path.join(calc_dir, 'OUTCAR')
+                if not os.path.exists(outcar):
+                    convergence = False
+                else:
+                    convergence = VASPBasicAnalysis(calc_dir).is_converged()
+                info[xc][calc]['convergence'] = convergence
+            
+            # This makes convergence to False if geometric optimization is not converged.
+            if calcs != ['neb']:
+                if not info[xc]['opt']['convergence']:
+                    for calc in calcs:
+                        info[xc][calc]['convergence'] = False
+        return info
